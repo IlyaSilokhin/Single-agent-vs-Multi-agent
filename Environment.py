@@ -40,10 +40,12 @@ class CoinCollectionEnv:
         self.agent_positions = []
         self.coins = []
         self.steps = 0
-        self.reset()
+        self.reset(num_coins)
 
-    def reset(self):
+    def reset(self, n_coins):
+        self.num_coins = np.clip(n_coins, 1, 5)
         self.agent_positions = [self._random_empty_agent_pos() for _ in range(self.num_agents)]
+        self.coins = []
         for _ in range(self.num_coins):
             self.coins.append(self._empty_coin_pos())
         self.steps = 0
@@ -90,7 +92,6 @@ class CoinCollectionEnv:
 
         # Draw coins
         for (cx, cy) in self.coins:
-            print(f'cx, cy = {cx}, {cy}')
             center = (cy * self.cell_size + self.cell_size // 2, cx * self.cell_size + self.cell_size // 2)
             pygame.draw.circle(self.screen, self.coin_color, center, self.cell_size // 4)
 
@@ -111,28 +112,23 @@ class CoinCollectionEnv:
                 return pos
 
     def _empty_coin_pos(self):
-        print('Coins:', self.coins)
         free = [pos for pos in self.coin_slots if pos not in self.coins]
         if not free:
             print('None')
             return None
         pos = random.choice(free)
-        print('Coin pos:', pos)
         return pos
 
+    def _get_coins_mask(self):
+        mask = []
+        for i, slot in enumerate(self.coin_slots):
+            if slot in self.coins:
+                mask.append(1)
+            else:
+                mask.append(0)
+        return mask
+
     def get_obs(self):
-        return {
-            "agents": self.agent_positions,
-            "coins": self.coins
-        }
-
-
-if __name__ == "__main__":
-    env = CoinCollectionEnv(grid_size=10, num_agents=3, num_coins=3, max_steps=10)
-
-    done = False
-    while not done:
-        actions = [random.choice(env.action_space) for _ in range(env.num_agents)]
-        obs, rewards, done = env.step(actions)
-        print("Actions:", actions, "Rewards:", rewards)
-        env.render()
+        xs = [pos[0] for pos in self.agent_positions]
+        ys = [pos[1] for pos in self.agent_positions]
+        return xs, ys, self._get_coins_mask()
