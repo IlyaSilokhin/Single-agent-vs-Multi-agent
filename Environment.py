@@ -1,6 +1,7 @@
 import numpy as np
 import random
 import pygame
+import cv2
 
 
 class CoinCollectionEnv:
@@ -33,9 +34,14 @@ class CoinCollectionEnv:
 
         # Pygame setup
         pygame.init()
+        width = grid_size * cell_size
+        height = grid_size * cell_size
         self.screen = pygame.display.set_mode((grid_size * cell_size, grid_size * cell_size))
         pygame.display.set_caption("Coin Collection Environment")
         self.clock = pygame.time.Clock()
+
+        fps = 5
+        self.out = cv2.VideoWriter('Records/game.avi', cv2.VideoWriter_fourcc(*'XVID'), fps, (width, height))
 
         self.agent_positions = []
         self.coins = []
@@ -101,6 +107,12 @@ class CoinCollectionEnv:
             rect = pygame.Rect(ay * self.cell_size + 5, ax * self.cell_size + 5,
                                self.cell_size - 10, self.cell_size - 10)
             pygame.draw.rect(self.screen, color, rect)
+
+        # Capture Frame
+        frame = pygame.surfarray.array3d(self.screen)
+        frame = frame.swapaxes(0, 1)
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        self.out.write(frame)
 
         pygame.display.flip()
         self.clock.tick(5)  # 5 FPS
