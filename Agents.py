@@ -27,9 +27,10 @@ def update_epsilon(epsilon_start, epsilon_end, progress):
     return max(epsilon_end, epsilon_start - (epsilon_start - epsilon_end) * progress)
 
 
-class ReplayBuffer:
+class ReplayBufferIQL:
     def __init__(self, capacity: int, obs_dim: int):
         self.capacity = capacity
+        self.obs_dim = obs_dim
         self.ptr = 0
         self.size = 0
 
@@ -41,9 +42,37 @@ class ReplayBuffer:
 
     def add(self, obs, action, reward, next_obs, done):
         self.obs[self.ptr] = obs
-        self.actions[self.ptr] = int(action)
-        self.rewards[self.ptr] = float(reward)
+        self.actions[self.ptr] = action
+        self.rewards[self.ptr] = reward
         self.next_obs[self.ptr] = next_obs
+        self.dones[self.ptr] = done
+
+        self.ptr = (self.ptr + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
+
+    def sample(self, batch_size):
+        idx = np.random.randint(0, self.size, batch_size)
+        return tuple(buf[idx] for buf in (self.obs, self.actions, self.rewards, self.next_obs, self.dones))
+
+class ReplayBufferVDN:
+    def __init__(self, capacity: int, n_agents: int, obs_dim: int):
+        self.capacity = capacity
+        self.n_agents = n_agents
+        self.obs_dim = obs_dim
+        self.ptr = 0
+        self.size = 0
+
+        self.obs = np.zeros((capacity, n_agents, obs_dim), dtype=np.float32)
+        self.next_obs = np.zeros((capacity, n_agents, obs_dim), dtype=np.float32)
+        self.actions = np.zeros((capacity, n_agents), dtype=np.int32)
+        self.rewards = np.zeros((capacity,), dtype=np.float32)
+        self.dones = np.zeros((capacity,), dtype=np.float32)
+
+    def add(self, obs, actions, reward, next_obs, done):
+        self.obs[self.ptr] = np.asarray(obs, dtype=np.float32)
+        self.actions[self.ptr] = np.asarray(actions, dtype=np.int32)
+        self.rewards[self.ptr] = reward
+        self.next_obs[self.ptr] = np.asarray(next_obs, dtype=np.float32)
         self.dones[self.ptr] = float(done)
 
         self.ptr = (self.ptr + 1) % self.capacity
@@ -51,10 +80,14 @@ class ReplayBuffer:
 
     def sample(self, batch_size: int):
         idx = np.random.randint(0, self.size, size=batch_size)
-        return tuple(buf[idx] for buf in (self.obs, self.actions, self.rewards, self.next_obs, self.dones))
+        return (
+            self.obs[idx],
+            self.actions[idx],
+            self.rewards[idx],
+            self.next_obs[idx],
+            self.dones[idx],
+        )
 
-    def __len__(self):
-        return self.size
 
 class SingleAgentDQN:
     def __init__(self, env, obs_dim, n_actions, **cfg):
@@ -76,7 +109,7 @@ class SingleAgentDQN:
 
         self.optimizer = optimizers.Adam(cfg.get("lr", 1e-4))
         self.loss_fn = losses.Huber()
-        self.replay = ReplayBuffer(cfg.get("buffer_capacity", 50_000), obs_dim)
+        self.buffer = ReplayBufferIQL(cfg.get("buffer_capacity", 50_000), obs_dim=obs_dim)
 
         self.train_steps = 0
 
@@ -119,12 +152,12 @@ class SingleAgentDQN:
         return loss
 
     def train_from_replay(self, n_updates=1):
-        if len(self.replay) < self.batch_size:
+        if self.buffer.size < self.batch_size:
             return None
 
         losses = []
         for _ in range(n_updates):
-            s_b, a_b, r_b, ns_b, d_b = self.replay.sample(self.batch_size)
+            s_b, a_b, r_b, ns_b, d_b = self.buffer.sample(self.batch_size)
             # convert to tensors
             s_t = tf.convert_to_tensor(s_b, dtype=tf.float32)
             a_t = tf.convert_to_tensor(a_b, dtype=tf.int32)
@@ -135,8 +168,8 @@ class SingleAgentDQN:
             loss = self.train_step(s_t, a_t, r_t, ns_t, d_t)
             losses.append(float(loss.numpy()))
 
-            self.train_step_count += 1
-            if self.train_step_count % self.target_update_freq == 0:
+            self.train_steps += 1
+            if self.train_steps % self.target_update_freq == 0:
                 self.target_model.set_weights(self.model.get_weights())
 
         return float(np.mean(losses)) if losses else None
@@ -179,7 +212,7 @@ class MultiAgentIQL_DQN:
                 for i, agent in enumerate(self.agents):
                     obs = build_agent_obs(state, i, self.n_agents)
                     next_obs = build_agent_obs(next_state, i, self.n_agents)
-                    agent.replay.add(obs, actions[i], rewards[i], next_obs, done)
+                    agent.buffer.add(obs, actions[i], rewards[i], next_obs, done)
                     ep_rewards[i] += rewards[i]
                     if rewards[i] > 0:
                         env_reward += rewards[i]
@@ -241,7 +274,7 @@ class VDNTrainer:
         self.batch_size = batch_size
         self.target_update_freq = target_update_freq
 
-        self.buffer = ReplayBuffer(buffer_capacity, obs_dim)
+        self.buffer = ReplayBufferVDN(buffer_capacity, n_agents, obs_dim)
 
         # Networks
         self.agent_net = build_agent_net(obs_dim, n_actions, hidden_sizes)
@@ -281,12 +314,12 @@ class VDNTrainer:
             q_next_target = tf.reshape(q_next_target, (B, self.n_agents, self.n_actions))
 
             batch_idx = tf.range(B)[:, None]
-            #batch_idx_tiled = tf.tile(batch_idx, [1, self.n_agents])
+            batch_idx_tiled = tf.tile(batch_idx, [1, self.n_agents])
             agent_idx = tf.range(self.n_agents)[None, :]
-            #agent_idx_tiled = tf.tile(agent_idx, [B, 1])
+            agent_idx_tiled = tf.tile(agent_idx, [B, 1])
 
-            idx = tf.stack([batch_idx, agent_idx, actions], axis=-1)
-            idx_next = tf.stack([batch_idx, agent_idx, next_actions], axis=-1)
+            idx = tf.stack([batch_idx_tiled, agent_idx_tiled, actions], axis=-1)
+            idx_next = tf.stack([batch_idx_tiled, agent_idx_tiled, next_actions], axis=-1)
 
             q_taken = tf.gather_nd(q, idx)
             q_next = tf.gather_nd(q_next_target, idx_next)

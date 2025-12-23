@@ -14,7 +14,7 @@ def print_results(results):
             print(f"    Agent {i}: {pct*100:.1f}% of coins")
 
 N_AGENTS = 2
-EPISODES = 15000
+EPISODES = 1000
 ALPHA = 0.0003
 GAMMA = 0.99
 EPSILON_START = 0
@@ -32,8 +32,8 @@ if __name__ == "__main__":
     agents_iql = Agents.MultiAgentIQL_DQN(n_agents=N_AGENTS, env=env_iql, obs_dim=obs_dim, lr=ALPHA, gamma=GAMMA, epsilon_start=EPSILON_START)
     agents_vdn = Agents.VDNTrainer(n_agents=N_AGENTS, obs_dim=obs_dim, n_actions=4, lr=ALPHA, gamma=GAMMA, batch_size=64, target_update_freq=200)
     if TRAIN:
-        init_states = agents_iql.train(episodes=EPISODES, save=True, n_states_to_save=EPISODES)
-        agents_vdn.train(env=env_vdn, episodes=EPISODES, epsilon_start=EPSILON_START, epsilon_end=0.1, save=True, init_states=init_states)
+        init_states = agents_iql.train(episodes=EPISODES, save=False, n_states_to_save=EPISODES)
+        agents_vdn.train(env=env_vdn, episodes=EPISODES, epsilon_start=EPSILON_START, epsilon_end=0.1, save=False, init_states=init_states)
         with open('Plots/training_info/iql_results.pkl', 'rb') as f:
             iql_results = pickle.load(f)
         with open('Plots/training_info/vdn_results.pkl', 'rb') as f:
